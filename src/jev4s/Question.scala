@@ -2,6 +2,7 @@ package jev4s
 
 import cats.Applicative
 import cats.~>
+import cats.data.Const
 import cats.data.StateT
 import cats.free.FreeApplicative
 import cats.syntax.all.*
@@ -111,14 +112,18 @@ object Question {
   private def idOf(index: Int): String = s"q$index"
 
   private def specs[A](question: Question[A]): Vector[QuestionSpec] =
-    question.analyze(new (Ask ~> ([x] =>> Vector[QuestionSpec])) {
-      def apply[x](ask: Ask[x]): Vector[QuestionSpec] = Vector(ask.spec)
-    })
+    question
+      .foldMap(new (Ask ~> Const[Vector[QuestionSpec], *]) {
+        def apply[x](ask: Ask[x]): Const[Vector[QuestionSpec], x] = Const(Vector(ask.spec))
+      })
+      .getConst
 
   private def problems[A](question: Question[A]): Vector[String] =
-    question.analyze(new (Ask ~> ([x] =>> Vector[String])) {
-      def apply[x](ask: Ask[x]): Vector[String] = ask.problems
-    })
+    question
+      .foldMap(new (Ask ~> Const[Vector[String], *]) {
+        def apply[x](ask: Ask[x]): Const[Vector[String], x] = Const(ask.problems)
+      })
+      .getConst
 
   private[jev4s] def requestBody[S: Encoder, A](state: S, question: Question[A], model: ModelId): Either[String, Json] = {
     val all = specs(question)
