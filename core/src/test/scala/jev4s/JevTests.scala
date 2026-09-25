@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Polyvariant
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package jev4s
 
 import cats.effect.IO
@@ -19,7 +35,10 @@ class JevTests extends CatsEffectSuite {
   private def fake(status: Status, body: Json): IO[(Ref[IO, List[(String, Json)]], Jev[IO])] =
     Ref[IO].of(List.empty[(String, Json)]).map { seen =>
       given Client[IO] = Client.fromHttpApp(HttpApp[IO] { req =>
-        req.as[Json].flatMap(j => seen.update(_ :+ (req.uri.renderString -> j))).as(Response[IO](status).withEntity(body))
+        req
+          .as[Json]
+          .flatMap(j => seen.update(_ :+ (req.uri.renderString -> j)))
+          .as(Response[IO](status).withEntity(body))
       })
       (seen, Jev.instance[IO](config))
     }
@@ -77,7 +96,11 @@ class JevTests extends CatsEffectSuite {
       )
       assertEquals(
         body.hcursor.downField("questions").downField("q3").focus,
-        Some(json("""{"type": "noul", "instructions": "Does the ticket ask about refund?", "criteria": null}""")),
+        Some(
+          json(
+            """{"type": "noul", "instructions": "Does the ticket ask about refund?", "criteria": null}"""
+          )
+        ),
       )
     }
   }
@@ -86,39 +109,53 @@ class JevTests extends CatsEffectSuite {
     val options = Options.derived[Plan]
     assertEquals(options.values.toVector, Vector(Plan.Free, Plan.Pro))
     assertEquals(options.values.toVector.map(options.label), Vector("Free", "paid"))
-    assertEquals(options.values.toVector.map(options.description), Vector(Some(Json.fromString("No payment")), None))
+    assertEquals(
+      options.values.toVector.map(options.description),
+      Vector(Some(Json.fromString("No payment")), None),
+    )
   }
 
   test("derivation rejects cases with fields") {
     assert(
-      compileErrors("Options.derived[WithFields]").contains("only parameterless cases can be options"),
+      compileErrors("Options.derived[WithFields]").contains(
+        "only parameterless cases can be options"
+      ),
       compileErrors("Options.derived[WithFields]"),
     )
   }
 
   test("invalid questions fail before sending") {
-    val tooFewLevels = Question.score(using Options.derived[Single])("?")
-    fake(Status.Ok, Json.obj()).flatMap((seen, jev) =>
-      jev.evaluate("x", tooFewLevels).attempt.product(seen.get)
-    ).map { (result, requests) =>
-      assert(result.left.exists(_.isInstanceOf[JevError.InvalidQuestion]), result)
-      assertEquals(requests, Nil)
-    }
+    val tooFewLevels =
+      Question.score(
+        using Options.derived[Single]
+      )("?")
+    fake(Status.Ok, Json.obj())
+      .flatMap((seen, jev) => jev.evaluate("x", tooFewLevels).attempt.product(seen.get))
+      .map { (result, requests) =>
+        assert(result.left.exists(_.isInstanceOf[JevError.InvalidQuestion]), result)
+        assertEquals(requests, Nil)
+      }
   }
 
   test("duplicate choice labels fail before sending") {
-    val question = Question.choice(using Options.labels("a", "b", "a"))("?")
-    fake(Status.Ok, Json.obj()).flatMap((seen, jev) => jev.evaluate("x", question).attempt.product(seen.get)).map {
-      (result, requests) =>
+    val question =
+      Question.choice(
+        using Options.labels("a", "b", "a")
+      )("?")
+    fake(Status.Ok, Json.obj())
+      .flatMap((seen, jev) => jev.evaluate("x", question).attempt.product(seen.get))
+      .map { (result, requests) =>
         assertEquals(result, Left(JevError.InvalidQuestion("Duplicate Choice labels: a")))
         assertEquals(requests, Nil)
-    }
+      }
   }
 
   test("422 is surfaced with its body") {
-    fake(Status.UnprocessableContent, Json.obj("detail" -> Json.fromString("bad"))).flatMap((_, jev) =>
-      jev.evaluate("x", Question.noul("?")).attempt
-    ).map(r => assertEquals(r, Left(JevError.Unprocessable(Json.obj("detail" -> Json.fromString("bad"))))))
+    fake(Status.UnprocessableContent, Json.obj("detail" -> Json.fromString("bad")))
+      .flatMap((_, jev) => jev.evaluate("x", Question.noul("?")).attempt)
+      .map(r =>
+        assertEquals(r, Left(JevError.Unprocessable(Json.obj("detail" -> Json.fromString("bad")))))
+      )
   }
 }
 
@@ -127,6 +164,7 @@ enum Single {
 }
 
 sealed trait Plan
+
 object Plan {
   @description("No payment") case object Free extends Plan
   @label("paid") case object Pro extends Plan

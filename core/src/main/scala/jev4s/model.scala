@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Polyvariant
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package jev4s
 
 import cats.Order
@@ -22,7 +38,10 @@ object Probability {
     def complement: Probability = 1.0 - p
   }
 
-  given Order[Probability] = Order.fromOrdering(using Ordering.Double.TotalOrdering)
+  given Order[Probability] = Order.fromOrdering(
+    using Ordering.Double.TotalOrdering
+  )
+
   given Ordering[Probability] = Ordering.Double.TotalOrdering
   given Decoder[Probability] = Decoder.decodeDouble.map(clamped)
 }
@@ -39,7 +58,10 @@ object Confidence {
     def value: Double = c
   }
 
-  given Order[Confidence] = Order.fromOrdering(using Ordering.Double.TotalOrdering)
+  given Order[Confidence] = Order.fromOrdering(
+    using Ordering.Double.TotalOrdering
+  )
+
   given Ordering[Confidence] = Ordering.Double.TotalOrdering
   given Decoder[Confidence] = Decoder.decodeDouble.map(d => math.max(0.0, math.min(1.0, d)))
 }
@@ -67,13 +89,21 @@ object ModelId {
 final case class Usage(inputTokens: Long, outputTokens: Long)
 
 object Usage {
-  given Decoder[Usage] = KindlingsDecoder.derived(using wireConfig)
+
+  given Decoder[Usage] = KindlingsDecoder.derived(
+    using wireConfig
+  )
+
 }
 
 final case class ModelCard(name: ModelId, description: String, releaseDate: String)
 
 object ModelCard {
-  given Decoder[ModelCard] = KindlingsDecoder.derived(using wireConfig)
+
+  given Decoder[ModelCard] = KindlingsDecoder.derived(
+    using wireConfig
+  )
+
 }
 
 /** The result of one evaluation: your typed answers plus request metadata. */

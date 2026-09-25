@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Polyvariant
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package example
 
 import cats.effect.IO
@@ -36,16 +52,20 @@ object Triage {
 
   val topics: List[String] = List("refund", "account access", "data loss")
 
-  val question: Question[Triage] = (
-    Question.noul(
-      "Does `message` convey urgency?",
-      yes = "Explicitly time-sensitive",
-      no = "No urgency expressed",
-    ),
-    Question.choice[Department]("Which team should handle this ticket?"),
-    Question.score[Frustration]("How frustrated is the customer?"),
-    topics.traverse(t => Question.noul(s"Does the ticket ask about $t?").tupleLeft(t)).map(_.toMap),
-  ).mapN(Triage.apply)
+  val question: Question[Triage] =
+    (
+      Question.noul(
+        "Does `message` convey urgency?",
+        yes = "Explicitly time-sensitive",
+        no = "No urgency expressed",
+      ),
+      Question.choice[Department]("Which team should handle this ticket?"),
+      Question.score[Frustration]("How frustrated is the customer?"),
+      topics
+        .traverse(t => Question.noul(s"Does the ticket ask about $t?").tupleLeft(t))
+        .map(_.toMap),
+    ).mapN(Triage.apply)
+
 }
 
 object Main extends IOApp.Simple {
@@ -61,11 +81,20 @@ object Main extends IOApp.Simple {
           Triage.question,
         )
         triage = result.answers
-        _ <- IO.println(s"answered by ${result.model.value}, ${result.usage.inputTokens} input tokens")
+        _ <- IO.println(
+          s"answered by ${result.model.value}, ${result.usage.inputTokens} input tokens"
+        )
         _ <- IO.println(s"urgent: ${triage.urgent.yes.value}")
-        _ <- IO.println(s"department: ${triage.department.choice} (confidence ${triage.department.confidence.value})")
-        _ <- IO.println(s"frustration: ${triage.frustration.score} ~ ${triage.frustration.mostLikely}")
-        _ <- IO.println(s"topics: ${triage.topics.filter(_._2.yes.value > 0.5).keys.mkString(", ")}")
+        _ <- IO.println(
+          s"department: ${triage.department.choice} (confidence ${triage.department.confidence.value})"
+        )
+        _ <- IO.println(
+          s"frustration: ${triage.frustration.score} ~ ${triage.frustration.mostLikely}"
+        )
+        _ <- IO.println(
+          s"topics: ${triage.topics.filter(_._2.yes.value > 0.5).keys.mkString(", ")}"
+        )
       } yield ()
     }
+
 }
