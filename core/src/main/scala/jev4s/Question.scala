@@ -82,9 +82,7 @@ object Question {
   def noul[I: Encoder, Y: Encoder, N: Encoder](instructions: I, yes: Y, no: N): Question[Noul] =
     single(
       QuestionSpec.Noul(instructions.asJson, Some(NoulCriteria(Some(yes.asJson), Some(no.asJson))))
-    ) { case RawAnswer.Noul(p) =>
-      Right(Noul(p))
-    }
+    ) { case RawAnswer.Noul(p) => Right(Noul(p)) }
 
   /** Picks one of `A`'s options, e.g. the cases of an enum with a `given Options`. */
   def choice[A](
