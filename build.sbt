@@ -11,7 +11,8 @@ ThisBuild / githubWorkflowPublishTargetBranches := Seq(
 )
 
 ThisBuild / scalaVersion := "3.9.0"
-ThisBuild / tlJdkRelease := Some(11)
+ThisBuild / tlJdkRelease := Some(17)
+ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec.temurin("17"))
 ThisBuild / tlFatalWarnings := false
 
 ThisBuild / mergifyStewardConfig ~= (_.map(_.withMergeMinors(true)))
