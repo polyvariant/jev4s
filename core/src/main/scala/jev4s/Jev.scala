@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Polyvariant
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package jev4s
 
 import cats.effect.Concurrent
@@ -30,8 +46,9 @@ import scala.concurrent.duration.*
 /** A client for TypeSafe's System One models (Jev). */
 trait Jev[F[_]] {
 
-  /** Evaluates every question in `question` against `state` in one request. `state` is any JSON-encodable value:
-    * a String for plain text, or a case class / map / list for structured context.
+  /** Evaluates every question in `question` against `state` in one request. `state` is any
+    * JSON-encodable value: a String for plain text, or a case class / map / list for structured
+    * context.
     */
   def evaluate[S: Encoder, A](state: S, question: Question[A]): F[Evaluation[A]]
 
@@ -57,7 +74,9 @@ object JevConfig {
     val disabled: RetryConfig = RetryConfig(maxRetries = 0, maxBackoff = Duration.Zero)
   }
 
-  /** Reads `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL`, like the official SDKs. */
+  /** Reads `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL`, like
+    * the official SDKs.
+    */
   def fromEnv[F[_]: Env: Concurrent]: F[JevConfig] =
     (
       Env[F].get("TYPESAFE_API_KEY").flatMap(_.liftTo[F](JevError.MissingApiKey)),
@@ -70,6 +89,7 @@ object JevConfig {
         model = model.fold(base.model)(ModelId(_)),
       )
     }
+
 }
 
 enum JevError(message: String) extends Exception(message) {
@@ -79,25 +99,37 @@ enum JevError(message: String) extends Exception(message) {
   case Unprocessable(body: Json) extends JevError(s"Request failed validation: ${body.noSpaces}")
   case RateLimited(body: String) extends JevError(s"Rate limited: $body")
   case Overloaded(body: String) extends JevError(s"Overloaded: $body")
-  case UnexpectedStatus(status: Status, body: String) extends JevError(s"Unexpected status $status: $body")
+  case UnexpectedStatus(status: Status, body: String)
+    extends JevError(s"Unexpected status $status: $body")
   case UnexpectedAnswer(reason: String) extends JevError(s"Unexpected answer: $reason")
 }
 
 object Jev {
 
-  /** Timeouts, connection pooling etc. are up to the `Client` you provide; retries are added on top of it. */
-  def instance[F[_]: Temporal](config: JevConfig)(using client: Client[F]): Jev[F] =
+  /** Timeouts, connection pooling etc. are up to the `Client` you provide; retries are added on top
+    * of it.
+    */
+  def instance[F[_]: Temporal](
+    config: JevConfig
+  )(
+    using client: Client[F]
+  ): Jev[F] =
     JevImpl(config, withRetries(config.retry, client))
 
   // Same statuses as the official SDKs: 408, 429, 5xx (529 included). Retry-After is honored by the middleware.
-  private def withRetries[F[_]: Temporal](config: JevConfig.RetryConfig, client: Client[F]): Client[F] =
-    if (config.maxRetries <= 0) client
+  private def withRetries[F[_]: Temporal](config: JevConfig.RetryConfig, client: Client[F])
+    : Client[F] =
+    if (config.maxRetries <= 0)
+      client
     else
       Retry[F](
         RetryPolicy(
           RetryPolicy.exponentialBackoff(config.maxBackoff, config.maxRetries),
           (_, result) =>
-            result.fold(_ => true, r => r.status.code == 408 || r.status.code == 429 || r.status.code >= 500),
+            result.fold(
+              _ => true,
+              r => r.status.code == 408 || r.status.code == 429 || r.status.code >= 500,
+            ),
         ),
         Headers.SensitiveHeaders.contains,
       )(client)
@@ -107,9 +139,17 @@ object Jev {
 
     def evaluate[S: Encoder, A](state: S, question: Question[A]): F[Evaluation[A]] =
       for {
-        body <- Question.requestBody(state, question, config.model).leftMap(JevError.InvalidQuestion(_)).liftTo[F]
-        response <- client.run(authorized(Method.POST, "v1/systemone").withEntity(body)).use(decodeOrFail[ResponseBody])
-        evaluation <- Question.decodeResponse(question, response).leftMap(JevError.UnexpectedAnswer(_)).liftTo[F]
+        body <- Question
+          .requestBody(state, question, config.model)
+          .leftMap(JevError.InvalidQuestion(_))
+          .liftTo[F]
+        response <- client
+          .run(authorized(Method.POST, "v1/systemone").withEntity(body))
+          .use(decodeOrFail[ResponseBody])
+        evaluation <- Question
+          .decodeResponse(question, response)
+          .leftMap(JevError.UnexpectedAnswer(_))
+          .liftTo[F]
       } yield evaluation
 
     def models: F[List[ModelCard]] =
@@ -127,13 +167,17 @@ object Jev {
     private def decodeOrFail[A: Decoder](response: Response[F]): F[A] = {
       given EntityDecoder[F, A] = jsonOf[F, A]
       response.status match {
-        case s if s.isSuccess                => response.as[A]
-        case Status.Unauthorized             => response.as[String].flatMap(JevError.Unauthorized(_).raiseError)
-        case Status.UnprocessableContent     => response.as[Json].flatMap(JevError.Unprocessable(_).raiseError)
-        case Status.TooManyRequests          => response.as[String].flatMap(JevError.RateLimited(_).raiseError)
-        case s if s.code == 529              => response.as[String].flatMap(JevError.Overloaded(_).raiseError)
-        case s                               => response.as[String].flatMap(JevError.UnexpectedStatus(s, _).raiseError)
+        case s if s.isSuccess    => response.as[A]
+        case Status.Unauthorized => response.as[String].flatMap(JevError.Unauthorized(_).raiseError)
+        case Status.UnprocessableContent =>
+          response.as[Json].flatMap(JevError.Unprocessable(_).raiseError)
+        case Status.TooManyRequests =>
+          response.as[String].flatMap(JevError.RateLimited(_).raiseError)
+        case s if s.code == 529 => response.as[String].flatMap(JevError.Overloaded(_).raiseError)
+        case s => response.as[String].flatMap(JevError.UnexpectedStatus(s, _).raiseError)
       }
     }
+
   }
+
 }

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Polyvariant
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package jev4s
 
 import cats.Applicative
@@ -17,7 +33,9 @@ import jev4s.internal.ResponseBody
 
 import scala.collection.immutable.ListMap
 
-/** Answer to a yes/no question. There is no separate confidence: 0.5 means "yes and no equally likely". */
+/** Answer to a yes/no question. There is no separate confidence: 0.5 means "yes and no equally
+  * likely".
+  */
 final case class Noul(yes: Probability) {
   def no: Probability = yes.complement
 }
@@ -25,11 +43,17 @@ final case class Noul(yes: Probability) {
 final case class Choice[A](choice: A, probabilities: Map[A, Probability], confidence: Confidence)
 
 /** `score` is the probability-weighted level index, and can land between levels. */
-final case class Score[A](score: Double, probabilities: Map[A, Probability], confidence: Confidence) {
+final case class Score[A](
+  score: Double,
+  probabilities: Map[A, Probability],
+  confidence: Confidence,
+) {
   def mostLikely: A = probabilities.maxBy(_._2)._1
 }
 
-/** A single question: what goes over the wire, and how to read its answer. Lifted into [[Question]]. */
+/** A single question: what goes over the wire, and how to read its answer. Lifted into
+  * [[Question]].
+  */
 private[jev4s] final case class Ask[A](
   spec: QuestionSpec,
   decode: RawAnswer => Either[String, A],
@@ -39,9 +63,9 @@ private[jev4s] final case class Ask[A](
 
 /** One or more questions about the same state, whose combined answer is an `A`.
   *
-  * Compose with `mapN`/`tupled`/`traverse`: all questions in a `Question` go out in a single request and are
-  * evaluated in parallel, independently of each other. Question IDs are assigned by the library (the model never
-  * sees them), so answers can't be looked up under the wrong key.
+  * Compose with `mapN`/`tupled`/`traverse`: all questions in a `Question` go out in a single
+  * request and are evaluated in parallel, independently of each other. Question IDs are assigned by
+  * the library (the model never sees them), so answers can't be looked up under the wrong key.
   */
 opaque type Question[A] = FreeApplicative[Ask, A]
 
@@ -50,21 +74,30 @@ object Question {
   given Applicative[Question] = summon[Applicative[FreeApplicative[Ask, *]]]
 
   def noul[I: Encoder](instructions: I): Question[Noul] =
-    single(QuestionSpec.Noul(instructions.asJson, None)) { case RawAnswer.Noul(p) => Right(Noul(p)) }
+    single(QuestionSpec.Noul(instructions.asJson, None)) { case RawAnswer.Noul(p) =>
+      Right(Noul(p))
+    }
 
   /** A Noul with descriptions of what "yes" and "no" mean. */
   def noul[I: Encoder, Y: Encoder, N: Encoder](instructions: I, yes: Y, no: N): Question[Noul] =
-    single(QuestionSpec.Noul(instructions.asJson, Some(NoulCriteria(Some(yes.asJson), Some(no.asJson))))) {
-      case RawAnswer.Noul(p) => Right(Noul(p))
+    single(
+      QuestionSpec.Noul(instructions.asJson, Some(NoulCriteria(Some(yes.asJson), Some(no.asJson))))
+    ) { case RawAnswer.Noul(p) =>
+      Right(Noul(p))
     }
 
   /** Picks one of `A`'s options, e.g. the cases of an enum with a `given Options`. */
-  def choice[A](using options: Options[A]): ChoicePartiallyApplied[A] = ChoicePartiallyApplied(options)
+  def choice[A](
+    using options: Options[A]
+  ): ChoicePartiallyApplied[A] = ChoicePartiallyApplied(options)
 
   /** Rates the state on `A`'s levels, lowest first. */
-  def score[A](using levels: Options[A]): ScorePartiallyApplied[A] = ScorePartiallyApplied(levels)
+  def score[A](
+    using levels: Options[A]
+  ): ScorePartiallyApplied[A] = ScorePartiallyApplied(levels)
 
   final class ChoicePartiallyApplied[A] private[Question] (options: Options[A]) {
+
     def apply[I: Encoder](instructions: I): Question[Choice[A]] = {
       val labels = options.values.toVector.map(options.label)
       val byLabel = labels.zip(options.values.toVector).toMap
@@ -73,7 +106,8 @@ object Question {
         ListMap.from(options.values.toVector.map(a => options.label(a) -> options.description(a))),
       )
       val duplicates = labels.diff(labels.distinct).distinct
-      val problems = Option.when(duplicates.nonEmpty)(s"Duplicate Choice labels: ${duplicates.mkString(", ")}")
+      val problems =
+        Option.when(duplicates.nonEmpty)(s"Duplicate Choice labels: ${duplicates.mkString(", ")}")
       single(spec, problems.toVector) { case RawAnswer.Choice(choice, probabilities, confidence) =>
         (
           lookup(byLabel, choice),
@@ -81,9 +115,11 @@ object Question {
         ).mapN(Choice(_, _, confidence))
       }
     }
+
   }
 
   final class ScorePartiallyApplied[A] private[Question] (levels: Options[A]) {
+
     def apply[I: Encoder](instructions: I): Question[Score[A]] = {
       val byIndex = levels.values.toVector.zipWithIndex.map((a, i) => i.toString -> a).toMap
       // Score criteria are descriptions only; fall back to the label when a level has none.
@@ -92,21 +128,31 @@ object Question {
         levels.values.toVector.map(a => levels.description(a).getOrElse(levels.label(a).asJson)),
       )
       single(spec) { case RawAnswer.Score(score, probabilities, confidence) =>
-        probabilities.toList
+        probabilities
+          .toList
           .traverse((k, p) => lookup(byIndex, k).tupleRight(p))
           .map(ps => Score(score, ps.toMap, confidence))
       }
     }
+
   }
 
   private def lookup[A](m: Map[String, A], key: String): Either[String, A] =
     m.get(key).toRight(s"Unexpected option in answer: $key")
 
-  private def single[A](spec: QuestionSpec, problems: Vector[String] = Vector.empty)(
+  private def single[A](
+    spec: QuestionSpec,
+    problems: Vector[String] = Vector.empty,
+  )(
     f: PartialFunction[RawAnswer, Either[String, A]]
   ): Question[A] =
     FreeApplicative.lift(
-      Ask(spec, raw => f.applyOrElse(raw, other => Left(s"Answer type mismatch: expected $spec, got $other")), problems)
+      Ask(
+        spec,
+        raw =>
+          f.applyOrElse(raw, other => Left(s"Answer type mismatch: expected $spec, got $other")),
+        problems,
+      )
     )
 
   private def idOf(index: Int): String = s"q$index"
@@ -125,7 +171,8 @@ object Question {
       })
       .getConst
 
-  private[jev4s] def requestBody[S: Encoder, A](state: S, question: Question[A], model: ModelId): Either[String, Json] = {
+  private[jev4s] def requestBody[S: Encoder, A](state: S, question: Question[A], model: ModelId)
+    : Either[String, Json] = {
     val all = specs(question)
     val definitionProblems = problems(question)
     for {
@@ -142,11 +189,13 @@ object Question {
   // Walks the questions in the same order as `specs`, so the n-th question reads the answer under `idOf(n)`.
   private type Decoding[x] = StateT[Either[String, *], Int, x]
 
-  private[jev4s] def decodeResponse[A](question: Question[A], body: ResponseBody): Either[String, Evaluation[A]] =
+  private[jev4s] def decodeResponse[A](question: Question[A], body: ResponseBody)
+    : Either[String, Evaluation[A]] =
     question
       .foldMap(new (Ask ~> Decoding) {
         def apply[x](ask: Ask[x]): Decoding[x] = StateT { index =>
-          body.answers
+          body
+            .answers
             .get(idOf(index))
             .toRight(s"Missing answer for question ${idOf(index)}")
             .flatMap(ask.decode)
@@ -155,4 +204,5 @@ object Question {
       })
       .runA(0)
       .map(Evaluation(_, body.model, body.usage))
+
 }

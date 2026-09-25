@@ -1,0 +1,5 @@
+addSbtPlugin("org.typelevel" % "sbt-typelevel" % "0.8.7")
+addSbtPlugin("org.typelevel" % "sbt-typelevel-mergify" % "0.8.7")
+// sbt-scalajs-crossproject and sbt-scala-native-crossproject are pulled in transitively by sbt-typelevel.
+addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.22.0")
+addSbtPlugin("org.scala-native" % "sbt-scala-native" % "0.5.12")

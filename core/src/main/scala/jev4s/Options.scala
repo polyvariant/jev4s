@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Polyvariant
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package jev4s
 
 import cats.data.NonEmptyVector
@@ -8,8 +24,8 @@ import jev4s.internal.OptionsMacros
 
 /** The possible answers of a Choice, or the ordered levels of a Score.
   *
-  * For a Choice, `label` is the option key sent to the model (it carries meaning, unlike question IDs). For a
-  * Score, `values` must be ordered from lowest to highest level.
+  * For a Choice, `label` is the option key sent to the model (it carries meaning, unlike question
+  * IDs). For a Score, `values` must be ordered from lowest to highest level.
   */
 trait Options[A] {
   def values: NonEmptyVector[A]
@@ -18,14 +34,22 @@ trait Options[A] {
 
   final def labelledBy(f: A => String): Options[A] = Options.instance(values, f, description)
 
-  final def describedBy[D: Encoder](f: A => D): Options[A] = Options.instance(values, label, a => Some(f(a).asJson))
+  final def describedBy[D: Encoder](f: A => D): Options[A] = Options.instance(
+    values,
+    label,
+    a => Some(f(a).asJson),
+  )
+
 }
 
 object Options {
 
-  def apply[A](using o: Options[A]): Options[A] = o
+  def apply[A](
+    using o: Options[A]
+  ): Options[A] = o
 
-  def instance[A](values: NonEmptyVector[A], label: A => String, description: A => Option[Json]): Options[A] = {
+  def instance[A](values: NonEmptyVector[A], label: A => String, description: A => Option[Json])
+    : Options[A] = {
     val (v, l, d) = (values, label, description)
     new Options[A] {
       val values: NonEmptyVector[A] = v
@@ -47,8 +71,8 @@ object Options {
 
   /** Derives options for an enum (or sealed trait) of parameterless cases, in declaration order.
     *
-    * Each case is labelled by its name unless annotated with [[label]], and described by its [[description]]
-    * annotation if present. Also usable as `derives Options`.
+    * Each case is labelled by its name unless annotated with [[label]], and described by its
+    * [[description]] annotation if present. Also usable as `derives Options`.
     */
   inline def derived[A]: Options[A] = ${ OptionsMacros.derive[A] }
 
@@ -63,6 +87,11 @@ object Options {
   /** Score levels given by position: level `i` is described by the `i`-th string. */
   def levels(first: String, second: String, rest: String*): Options[Int] = {
     val all = first +: second +: rest.toVector
-    instance(NonEmptyVector.fromVectorUnsafe(all.indices.toVector), all(_), i => Some(all(i).asJson))
+    instance(
+      NonEmptyVector.fromVectorUnsafe(all.indices.toVector),
+      all(_),
+      i => Some(all(i).asJson),
+    )
   }
+
 }
