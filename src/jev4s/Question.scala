@@ -1,6 +1,9 @@
 package jev4s
 
 import cats.Applicative
+import cats.~>
+import cats.data.StateT
+import cats.free.FreeApplicative
 import cats.syntax.all.*
 import io.circe.Encoder
 import io.circe.Json
@@ -25,22 +28,25 @@ final case class Score[A](score: Double, probabilities: Map[A, Probability], con
   def mostLikely: A = probabilities.maxBy(_._2)._1
 }
 
+/** A single question: what goes over the wire, and how to read its answer. Lifted into [[Question]]. */
+private[jev4s] final case class Ask[A](
+  spec: QuestionSpec,
+  decode: RawAnswer => Either[String, A],
+  // Definition errors, reported by `evaluate` before anything is sent.
+  problems: Vector[String],
+)
+
 /** One or more questions about the same state, whose combined answer is an `A`.
   *
   * Compose with `mapN`/`tupled`/`traverse`: all questions in a `Question` go out in a single request and are
   * evaluated in parallel, independently of each other. Question IDs are assigned by the library (the model never
   * sees them), so answers can't be looked up under the wrong key.
   */
-final class Question[A] private (
-  private[jev4s] val specs: Vector[QuestionSpec],
-  private[jev4s] val decode: Vector[RawAnswer] => Either[String, A],
-  // Definition errors, reported by `evaluate` before anything is sent.
-  private[jev4s] val problems: Vector[String],
-) {
-  def map[B](f: A => B): Question[B] = Question(specs, decode(_).map(f), problems)
-}
+opaque type Question[A] = FreeApplicative[Ask, A]
 
 object Question {
+
+  given Applicative[Question] = summon[Applicative[FreeApplicative[Ask, *]]]
 
   def noul[I: Encoder](instructions: I): Question[Noul] =
     single(QuestionSpec.Noul(instructions.asJson, None)) { case RawAnswer.Noul(p) => Right(Noul(p)) }
@@ -66,17 +72,13 @@ object Question {
         ListMap.from(options.values.toVector.map(a => options.label(a) -> options.description(a))),
       )
       val duplicates = labels.diff(labels.distinct).distinct
-      val question = single(spec) { case RawAnswer.Choice(choice, probabilities, confidence) =>
+      val problems = Option.when(duplicates.nonEmpty)(s"Duplicate Choice labels: ${duplicates.mkString(", ")}")
+      single(spec, problems.toVector) { case RawAnswer.Choice(choice, probabilities, confidence) =>
         (
           lookup(byLabel, choice),
           probabilities.toList.traverse((k, p) => lookup(byLabel, k).tupleRight(p)).map(_.toMap),
         ).mapN(Choice(_, _, confidence))
       }
-      Question(
-        question.specs,
-        question.decode,
-        Option.when(duplicates.nonEmpty)(s"Duplicate Choice labels: ${duplicates.mkString(", ")}").toVector,
-      )
     }
   }
 
@@ -99,50 +101,53 @@ object Question {
   private def lookup[A](m: Map[String, A], key: String): Either[String, A] =
     m.get(key).toRight(s"Unexpected option in answer: $key")
 
-  private def single[A](spec: QuestionSpec)(f: PartialFunction[RawAnswer, Either[String, A]]): Question[A] =
-    Question(
-      Vector(spec),
-      {
-        case Vector(raw) => f.applyOrElse(raw, other => Left(s"Answer type mismatch: expected $spec, got $other"))
-        case other       => Left(s"Expected exactly one answer, got ${other.size}")
-      },
-      Vector.empty,
+  private def single[A](spec: QuestionSpec, problems: Vector[String] = Vector.empty)(
+    f: PartialFunction[RawAnswer, Either[String, A]]
+  ): Question[A] =
+    FreeApplicative.lift(
+      Ask(spec, raw => f.applyOrElse(raw, other => Left(s"Answer type mismatch: expected $spec, got $other")), problems)
     )
-
-  given Applicative[Question] with {
-    def pure[A](a: A): Question[A] = Question(Vector.empty, _ => Right(a), Vector.empty)
-
-    override def map[A, B](fa: Question[A])(f: A => B): Question[B] = fa.map(f)
-
-    override def product[A, B](fa: Question[A], fb: Question[B]): Question[(A, B)] =
-      Question(
-        fa.specs ++ fb.specs,
-        answers => {
-          val (as, bs) = answers.splitAt(fa.specs.size)
-          (fa.decode(as), fb.decode(bs)).tupled
-        },
-        fa.problems ++ fb.problems,
-      )
-
-    def ap[A, B](ff: Question[A => B])(fa: Question[A]): Question[B] = product(ff, fa).map((f, a) => f(a))
-  }
 
   private def idOf(index: Int): String = s"q$index"
 
-  private[jev4s] def requestBody[S: Encoder, A](state: S, question: Question[A], model: ModelId): Either[String, Json] =
+  private def specs[A](question: Question[A]): Vector[QuestionSpec] =
+    question.analyze(new (Ask ~> ([x] =>> Vector[QuestionSpec])) {
+      def apply[x](ask: Ask[x]): Vector[QuestionSpec] = Vector(ask.spec)
+    })
+
+  private def problems[A](question: Question[A]): Vector[String] =
+    question.analyze(new (Ask ~> ([x] =>> Vector[String])) {
+      def apply[x](ask: Ask[x]): Vector[String] = ask.problems
+    })
+
+  private[jev4s] def requestBody[S: Encoder, A](state: S, question: Question[A], model: ModelId): Either[String, Json] = {
+    val all = specs(question)
+    val definitionProblems = problems(question)
     for {
-      _ <- Either.cond(question.specs.nonEmpty, (), "At least one question is required")
-      _ <- Either.cond(question.problems.isEmpty, (), question.problems.mkString("; "))
-      _ <- question.specs.traverse_(_.validate)
+      _ <- Either.cond(all.nonEmpty, (), "At least one question is required")
+      _ <- Either.cond(definitionProblems.isEmpty, (), definitionProblems.mkString("; "))
+      _ <- all.traverse_(_.validate)
     } yield Json.obj(
       "state" := state,
       "model" := model,
-      "questions" := JsonObject.fromIterable(question.specs.zipWithIndex.map((s, i) => idOf(i) -> s.asJson)),
+      "questions" := JsonObject.fromIterable(all.zipWithIndex.map((s, i) => idOf(i) -> s.asJson)),
     )
+  }
+
+  // Walks the questions in the same order as `specs`, so the n-th question reads the answer under `idOf(n)`.
+  private type Decoding[x] = StateT[Either[String, *], Int, x]
 
   private[jev4s] def decodeResponse[A](question: Question[A], body: ResponseBody): Either[String, Evaluation[A]] =
-    question.specs.indices.toVector
-      .traverse(i => body.answers.get(idOf(i)).toRight(s"Missing answer for question ${idOf(i)}"))
-      .flatMap(question.decode)
+    question
+      .foldMap(new (Ask ~> Decoding) {
+        def apply[x](ask: Ask[x]): Decoding[x] = StateT { index =>
+          body.answers
+            .get(idOf(index))
+            .toRight(s"Missing answer for question ${idOf(index)}")
+            .flatMap(ask.decode)
+            .tupleLeft(index + 1)
+        }
+      })
+      .runA(0)
       .map(Evaluation(_, body.model, body.usage))
 }
