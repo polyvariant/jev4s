@@ -1,12 +1,9 @@
 package jev4s
 
-import cats.effect.Async
 import cats.effect.Concurrent
-import cats.effect.Resource
 import cats.effect.Temporal
 import cats.effect.std.Env
 import cats.syntax.all.*
-import fs2.io.net.Network
 import io.circe.Decoder
 import io.circe.Encoder
 import io.circe.Json
@@ -23,7 +20,6 @@ import org.http4s.circe.*
 import org.http4s.client.Client
 import org.http4s.client.middleware.Retry
 import org.http4s.client.middleware.RetryPolicy
-import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.headers.Authorization
 import org.http4s.implicits.*
 import org.http4s.AuthScheme
@@ -49,7 +45,6 @@ final case class JevConfig(
   apiKey: ApiKey,
   baseUri: Uri = uri"https://api.typesafe.ai",
   model: ModelId = ModelId.latest,
-  timeout: FiniteDuration = 10.seconds,
   retry: JevConfig.RetryConfig = JevConfig.RetryConfig.default,
 )
 
@@ -90,15 +85,9 @@ enum JevError(message: String) extends Exception(message) {
 
 object Jev {
 
+  /** Timeouts, connection pooling etc. are up to the `Client` you provide; retries are added on top of it. */
   def instance[F[_]: Temporal](config: JevConfig)(using client: Client[F]): Jev[F] =
     JevImpl(config, withRetries(config.retry, client))
-
-  /** Builds an Ember client with the configured per-attempt timeout. */
-  def resource[F[_]: Async: Network](config: JevConfig): Resource[F, Jev[F]] =
-    EmberClientBuilder.default[F].withTimeout(config.timeout).build.map { client =>
-      given Client[F] = client
-      instance(config)
-    }
 
   // Same statuses as the official SDKs: 408, 429, 5xx (529 included). Retry-After is honored by the middleware.
   private def withRetries[F[_]: Temporal](config: JevConfig.RetryConfig, client: Client[F]): Client[F] =

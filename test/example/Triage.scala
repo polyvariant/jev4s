@@ -5,6 +5,10 @@ import cats.effect.IOApp
 import cats.syntax.all.*
 import io.circe.Encoder
 import jev4s.*
+import org.http4s.client.Client
+import org.http4s.ember.client.EmberClientBuilder
+
+import scala.concurrent.duration.*
 
 enum Department derives Options {
   @label("billing") @description("Payments, invoicing, refunds") case Billing
@@ -47,8 +51,11 @@ object Triage {
 object Main extends IOApp.Simple {
 
   val run: IO[Unit] =
-    JevConfig.fromEnv[IO].toResource.flatMap(Jev.resource[IO]).use { jev =>
+    EmberClientBuilder.default[IO].withTimeout(10.seconds).build.use { client =>
+      given Client[IO] = client
       for {
+        config <- JevConfig.fromEnv[IO]
+        jev = Jev.instance[IO](config)
         result <- jev.evaluate(
           Ticket("Payouts", "Help! My payouts have been failing for 3 days."),
           Triage.question,
