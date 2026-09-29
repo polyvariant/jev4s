@@ -1,3 +1,0 @@
-export TYPESAFE_API_KEY=test
-export TYPESAFE_DEFAULT_MODEL=jev-latest
-export TYPESAFE_BASE_URL=https://api.typesafe.ai
