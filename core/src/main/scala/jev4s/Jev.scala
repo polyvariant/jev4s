@@ -109,11 +109,7 @@ object Jev {
   /** Timeouts, connection pooling etc. are up to the `Client` you provide; retries are added on top
     * of it.
     */
-  def instance[F[_]: Temporal](
-    config: JevConfig
-  )(
-    using client: Client[F]
-  ): Jev[F] =
+  def instance[F[_]: Temporal](config: JevConfig, client: Client[F]): Jev[F] =
     JevImpl(config, withRetries(config.retry, client))
 
   // Same statuses as the official SDKs: 408, 429, 5xx (529 included). Retry-After is honored by the middleware.

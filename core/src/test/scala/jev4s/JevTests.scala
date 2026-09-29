@@ -34,13 +34,13 @@ class JevTests extends CatsEffectSuite {
 
   private def fake(status: Status, body: Json): IO[(Ref[IO, List[(String, Json)]], Jev[IO])] =
     Ref[IO].of(List.empty[(String, Json)]).map { seen =>
-      given Client[IO] = Client.fromHttpApp(HttpApp[IO] { req =>
+      val client = Client.fromHttpApp(HttpApp[IO] { req =>
         req
           .as[Json]
           .flatMap(j => seen.update(_ :+ (req.uri.renderString -> j)))
           .as(Response[IO](status).withEntity(body))
       })
-      (seen, Jev.instance[IO](config))
+      (seen, Jev.instance[IO](config, client))
     }
 
   private def json(s: String): Json = parse(s).fold(throw _, identity)

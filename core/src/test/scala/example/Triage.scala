@@ -21,7 +21,6 @@ import cats.effect.IOApp
 import cats.syntax.all.*
 import io.circe.Encoder
 import jev4s.*
-import org.http4s.client.Client
 import org.http4s.ember.client.EmberClientBuilder
 
 import scala.concurrent.duration.*
@@ -72,10 +71,9 @@ object Main extends IOApp.Simple {
 
   val run: IO[Unit] =
     EmberClientBuilder.default[IO].withTimeout(10.seconds).build.use { client =>
-      given Client[IO] = client
       for {
         config <- JevConfig.fromEnv[IO]
-        jev = Jev.instance[IO](config)
+        jev = Jev.instance[IO](config, client)
         result <- jev.evaluate(
           Ticket("Payouts", "Help! My payouts have been failing for 3 days."),
           Triage.question,
