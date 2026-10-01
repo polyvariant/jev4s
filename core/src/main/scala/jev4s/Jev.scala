@@ -17,29 +17,24 @@
 package jev4s
 
 import cats.effect.Concurrent
+import cats.effect.MonadCancelThrow
+import cats.effect.Resource
 import cats.effect.Temporal
-import cats.effect.std.Env
 import cats.syntax.all.*
 import io.circe.Decoder
 import io.circe.Encoder
 import io.circe.Json
 import jev4s.internal.ModelList
 import jev4s.internal.ResponseBody
-import org.http4s.EntityDecoder
 import org.http4s.Headers
 import org.http4s.Method
 import org.http4s.Request
 import org.http4s.Response
 import org.http4s.Status
-import org.http4s.Uri
 import org.http4s.circe.*
 import org.http4s.client.Client
 import org.http4s.client.middleware.Retry
 import org.http4s.client.middleware.RetryPolicy
-import org.http4s.headers.Authorization
-import org.http4s.implicits.*
-import org.http4s.AuthScheme
-import org.http4s.Credentials
 
 import scala.concurrent.duration.*
 
@@ -54,14 +49,12 @@ trait Jev[F[_]] {
 
   def models: F[List[ModelCard]]
 
-  /** The same client, sending `model` instead of the configured one. */
+  /** The same client, sending `model` instead of the provider's default. */
   def withModel(model: ModelId): Jev[F]
 }
 
-final case class JevConfig(
-  apiKey: ApiKey,
-  baseUri: Uri = uri"https://api.typesafe.ai",
-  model: ModelId = ModelId.latest,
+final case class JevConfig[F[_]](
+  provider: Provider[F],
   retry: JevConfig.RetryConfig = JevConfig.RetryConfig.default,
 )
 
@@ -74,26 +67,12 @@ object JevConfig {
     val disabled: RetryConfig = RetryConfig(maxRetries = 0, maxBackoff = Duration.Zero)
   }
 
-  /** Reads `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL`, like
-    * the official SDKs.
-    */
-  def fromEnv[F[_]: Env: Concurrent]: F[JevConfig] =
-    (
-      Env[F].get("TYPESAFE_API_KEY").flatMap(_.liftTo[F](JevError.MissingApiKey)),
-      Env[F].get("TYPESAFE_BASE_URL").flatMap(_.traverse(Uri.fromString(_).liftTo[F])),
-      Env[F].get("TYPESAFE_DEFAULT_MODEL"),
-    ).mapN { (key, baseUri, model) =>
-      val base = JevConfig(ApiKey(key))
-      base.copy(
-        baseUri = baseUri.getOrElse(base.baseUri),
-        model = model.fold(base.model)(ModelId(_)),
-      )
-    }
-
 }
 
 enum JevError(message: String) extends Exception(message) {
-  case MissingApiKey extends JevError("TYPESAFE_API_KEY is not set")
+  case MissingEnv(name: String) extends JevError(s"$name is not set")
+  case Unsupported(operation: String)
+    extends JevError(s"Not supported by this provider: $operation")
   case InvalidQuestion(reason: String) extends JevError(s"Invalid question: $reason")
   case Unauthorized(body: String) extends JevError(s"Unauthorized: $body")
   case Unprocessable(body: Json) extends JevError(s"Request failed validation: ${body.noSpaces}")
@@ -109,8 +88,16 @@ object Jev {
   /** Timeouts, connection pooling etc. are up to the `Client` you provide; retries are added on top
     * of it.
     */
-  def instance[F[_]: Temporal](config: JevConfig, client: Client[F]): Jev[F] =
-    JevImpl(config, withRetries(config.retry, client))
+  def instance[F[_]: Temporal](config: JevConfig[F], client: Client[F]): Jev[F] =
+    JevImpl(
+      config.provider,
+      config.provider.defaultModel,
+      withRetries(config.retry, authorized(config.provider, client)),
+    )
+
+  // Under the retries, so that every attempt asks the provider for credentials.
+  private def authorized[F[_]: MonadCancelThrow](provider: Provider[F], client: Client[F])
+    : Client[F] = Client(request => Resource.eval(provider.authorize(request)).flatMap(client.run))
 
   // Same statuses as the official SDKs: 408, 429, 5xx (529 included). Retry-After is honored by the middleware.
   private def withRetries[F[_]: Temporal](config: JevConfig.RetryConfig, client: Client[F])
@@ -130,17 +117,22 @@ object Jev {
         Headers.SensitiveHeaders.contains,
       )(client)
 
-  private final class JevImpl[F[_]: Concurrent] private[Jev] (config: JevConfig, client: Client[F])
-    extends Jev[F] {
+  private final class JevImpl[F[_]: Concurrent] private[Jev] (
+    provider: Provider[F],
+    model: ModelId,
+    client: Client[F],
+  ) extends Jev[F] {
 
     def evaluate[S: Encoder, A](state: S, question: Question[A]): F[Evaluation[A]] =
       for {
         body <- Question
-          .requestBody(state, question, config.model)
+          .requestBody(state, question, model)
           .leftMap(JevError.InvalidQuestion(_))
           .liftTo[F]
         response <- client
-          .run(authorized(Method.POST, "v1/systemone").withEntity(body))
+          .run(
+            Request[F](Method.POST, provider.evaluateUri(model)).withEntity(body)
+          )
           .use(decodeOrFail[ResponseBody])
         evaluation <- Question
           .decodeResponse(question, response)
@@ -149,21 +141,29 @@ object Jev {
       } yield evaluation
 
     def models: F[List[ModelCard]] =
-      client
-        .run(authorized(Method.GET, "v1/models"))
-        .use(decodeOrFail[ModelList])
-        .map(_.models)
+      provider.modelsUri match {
+        case Some(uri) =>
+          client
+            .run(Request[F](Method.GET, uri))
+            .use(decodeOrFail[ModelList])
+            .map(_.models)
+        case None => JevError.Unsupported("listing models").raiseError
+      }
 
-    def withModel(model: ModelId): Jev[F] = JevImpl(config.copy(model = model), client)
+    def withModel(model: ModelId): Jev[F] = JevImpl(provider, model, client)
 
-    private def authorized(method: Method, path: String): Request[F] =
-      Request[F](method, config.baseUri.addPath(path))
-        .putHeaders(Authorization(Credentials.Token(AuthScheme.Bearer, config.apiKey.value)))
-
-    private def decodeOrFail[A: Decoder](response: Response[F]): F[A] = {
-      given EntityDecoder[F, A] = jsonOf[F, A]
+    private def decodeOrFail[A: Decoder](response: Response[F]): F[A] =
       response.status match {
-        case s if s.isSuccess    => response.as[A]
+        case s if s.isSuccess =>
+          response
+            .as[Json]
+            .flatMap(
+              provider
+                .unwrap(_)
+                .flatMap(_.as[A].leftMap(_.getMessage))
+                .leftMap(JevError.UnexpectedAnswer(_))
+                .liftTo[F]
+            )
         case Status.Unauthorized => response.as[String].flatMap(JevError.Unauthorized(_).raiseError)
         case Status.UnprocessableContent =>
           response.as[Json].flatMap(JevError.Unprocessable(_).raiseError)
@@ -172,7 +172,6 @@ object Jev {
         case s if s.code == 529 => response.as[String].flatMap(JevError.Overloaded(_).raiseError)
         case s => response.as[String].flatMap(JevError.UnexpectedStatus(s, _).raiseError)
       }
-    }
 
   }
 

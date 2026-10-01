@@ -78,6 +78,12 @@ object ModelId {
   /** The most recent release, official or not. */
   val preview: ModelId = "jev-preview"
 
+  /** Cloudflare's 27B multimodal Clef model, for [[Provider.workersAI]]. */
+  val clef: ModelId = "clef"
+
+  /** The faster Clef variant, for [[Provider.workersAI]]. */
+  val clefFlash: ModelId = "clef-flash"
+
   extension (m: ModelId) {
     def value: String = m
   }

@@ -67,9 +67,13 @@ private[jev4s] enum QuestionSpec {
 
 private[jev4s] object QuestionSpec {
 
-  given Encoder[QuestionSpec] = KindlingsEncoder.derived(
-    using wireConfig
-  )
+  // An absent Noul `criteria` is omitted rather than sent as null: Clef rejects the null. Only the
+  // top level is filtered, since null is a valid Choice option description.
+  given Encoder[QuestionSpec] = KindlingsEncoder
+    .derived[QuestionSpec](
+      using wireConfig
+    )
+    .mapJson(_.mapObject(_.filter((_, v) => !v.isNull)))
 
 }
 

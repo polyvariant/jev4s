@@ -86,8 +86,8 @@ object Main extends IOApp.Simple {
   val run: IO[Unit] =
     EmberClientBuilder.default[IO].build.use { client =>
       for {
-        config <- JevConfig.fromEnv[IO]
-        jev = Jev.instance[IO](config, client)
+        provider <- Provider.typeSafeFromEnv[IO]
+        jev = Jev.instance[IO](JevConfig(provider), client)
         result <- jev.evaluate(
           Ticket("Payouts", "Help! My payouts have been failing for 3 days."),
           triage,
@@ -118,7 +118,7 @@ on topic: 92%
 
 ## Configuration
 
-`JevConfig.fromEnv` reads the same environment variables as the official SDKs:
+A `Provider` knows where the API lives, how to authenticate with it and which model to use by default. `Provider.typeSafeFromEnv` reads the same environment variables as the official SDKs:
 
 | Variable | Required | Default |
 | --- | --- | --- |
@@ -126,9 +126,24 @@ on topic: 92%
 | `TYPESAFE_BASE_URL` | no | `https://api.typesafe.ai` |
 | `TYPESAFE_DEFAULT_MODEL` | no | `jev-latest` |
 
-You can also construct a `JevConfig` directly. Requests that fail with 408, 429 or 5xx are retried with exponential backoff (2 retries by default, see `JevConfig.RetryConfig`). Timeouts and connection pooling are up to the `Client` you provide.
+You can also construct one directly with `Provider.typeSafe[IO](ApiKey(...))`. Requests that fail with 408, 429 or 5xx are retried with exponential backoff (2 retries by default, see `JevConfig.RetryConfig`). Timeouts and connection pooling are up to the `Client` you provide.
 
 To use a different model for some requests, use `jev.withModel(ModelId("jev-1.13.0"))`. `jev.models` lists the available models.
+
+### Cloudflare Workers AI (Clef)
+
+Cloudflare's [Clef models](https://developers.cloudflare.com/workers-ai/models/clef/) speak the same System One format, so the same questions work against them:
+
+```scala
+val provider = Provider.workersAI[IO](accountId, ApiKey(apiToken)) // or Provider.workersAIFromEnv[IO]
+val jev = Jev.instance[IO](JevConfig(provider), client).withModel(ModelId.clefFlash)
+```
+
+`Provider.workersAIFromEnv` reads `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AUTH_TOKEN` and optionally `CLOUDFLARE_MODEL` (`clef` by default). The token needs the "Workers AI - Read" and "Workers AI - Edit" permissions. `jev.models` isn't supported on Workers AI. `example.ClefTriage` runs the triage example against Clef.
+
+### Other APIs
+
+Anything else that serves the System One format can be plugged in by implementing `Provider`: its endpoints, how it adds credentials to a request, and how to find the answers in its response body if they're wrapped.
 
 ## License
 

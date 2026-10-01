@@ -110,9 +110,9 @@ object VibeCheck extends IOApp.Simple {
   val run: IO[Unit] =
     EmberClientBuilder.default[IO].withTimeout(30.seconds).build.use { client =>
       for {
-        config <- JevConfig.fromEnv[IO]
+        provider <- Provider.typeSafeFromEnv[IO]
         _ <- IO.println("Say something (empty line to quit).")
-        _ <- loop(Jev.instance[IO](config, client), Nil)
+        _ <- loop(Jev.instance[IO](JevConfig(provider), client), Nil)
       } yield ()
     }
 
