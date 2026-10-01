@@ -22,17 +22,27 @@ import example.*
 import io.circe.Json
 import io.circe.parser.parse
 import munit.CatsEffectSuite
+import org.http4s.Header
 import org.http4s.HttpApp
+import org.http4s.Request
+import org.http4s.Uri
 import org.http4s.Response
 import org.http4s.Status
 import org.http4s.circe.*
 import org.http4s.client.Client
+import org.http4s.implicits.*
+import org.typelevel.ci.*
+
+import scala.concurrent.duration.*
 
 class JevTests extends CatsEffectSuite {
 
-  private val config = JevConfig(ApiKey("test-key"), retry = JevConfig.RetryConfig.disabled)
+  private val config = JevConfig(
+    Provider.typeSafe[IO](ApiKey("test-key")),
+    retry = JevConfig.RetryConfig.disabled,
+  )
 
-  private def fake(status: Status, body: Json, config: JevConfig = config)
+  private def fake(status: Status, body: Json, config: JevConfig[IO] = config)
     : IO[(Ref[IO, List[(String, Json)]], Jev[IO])] =
     Ref[IO].of(List.empty[(String, Json)]).map { seen =>
       val client = Client.fromHttpApp(HttpApp[IO] { req =>
@@ -150,7 +160,10 @@ class JevTests extends CatsEffectSuite {
   }
 
   private val workersAI =
-    JevConfig.workersAI("acc123", ApiKey("cf-token")).copy(retry = JevConfig.RetryConfig.disabled)
+    JevConfig(
+      Provider.workersAI[IO]("acc123", ApiKey("cf-token")),
+      retry = JevConfig.RetryConfig.disabled,
+    )
 
   // As returned by the real API, envelope included.
   private val noulResponse = json("""{
@@ -187,6 +200,40 @@ class JevTests extends CatsEffectSuite {
         assertEquals(result, Left(JevError.Unsupported("listing models")))
         assertEquals(requests, Nil)
       }
+  }
+
+  test("credentials are fetched for every attempt, retries included") {
+    for {
+      tokens <- Ref[IO].of(0)
+      seen <- Ref[IO].of(List.empty[String])
+      provider =
+        new Provider[IO] {
+          def defaultModel: ModelId = ModelId.latest
+          def evaluateUri(model: ModelId): Uri = uri"https://example.com/eval"
+          def modelsUri: Option[Uri] = None
+          def authorize(request: Request[IO]): IO[Request[IO]] =
+            tokens.updateAndGet(_ + 1).map(n => request.putHeaders(Header.Raw(ci"X-Token", s"t$n")))
+        }
+      client = Client.fromHttpApp(HttpApp[IO] { req =>
+        val token = req.headers.get(ci"X-Token").fold("none")(_.head.value)
+        seen.updateAndGet(_ :+ token).map { all =>
+          if (all.sizeIs == 1)
+            Response[IO](Status.ServiceUnavailable)
+          else
+            Response[IO](Status.Ok).withEntity(
+              json(
+                """{"model": "m", "answers": {"q0": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1, "output_tokens": 0}}"""
+              )
+            )
+        }
+      })
+      jev = Jev.instance[IO](
+        JevConfig(provider, JevConfig.RetryConfig(maxRetries = 1, maxBackoff = 1.milli)),
+        client,
+      )
+      _ <- jev.evaluate("x", Question.noul("?"))
+      tokensSent <- seen.get
+    } yield assertEquals(tokensSent, List("t1", "t2"))
   }
 
   test("422 is surfaced with its body") {

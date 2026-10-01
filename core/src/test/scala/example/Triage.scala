@@ -69,25 +69,25 @@ object Triage {
 
 object Main extends IOApp.Simple {
 
-  val run: IO[Unit] = JevConfig.fromEnv[IO].flatMap(TriageDemo.run)
+  val run: IO[Unit] = Provider.typeSafeFromEnv[IO].flatMap(TriageDemo.run)
 
 }
 
 // The same triage, answered by Cloudflare's Clef. Needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AUTH_TOKEN.
 object ClefTriage extends IOApp.Simple {
 
-  val run: IO[Unit] = JevConfig.workersAIFromEnv[IO].flatMap(TriageDemo.run)
+  val run: IO[Unit] = Provider.workersAIFromEnv[IO].flatMap(TriageDemo.run)
 
 }
 
 object TriageDemo {
 
-  def run(config: JevConfig): IO[Unit] =
+  def run(provider: Provider[IO]): IO[Unit] =
     EmberClientBuilder
       .default[IO]
       .withTimeout(30.seconds)
       .build
-      .use(client => triage(Jev.instance[IO](config, client)))
+      .use(client => triage(Jev.instance[IO](JevConfig(provider), client)))
 
   def triage(jev: Jev[IO]): IO[Unit] =
     for {
