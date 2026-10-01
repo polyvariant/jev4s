@@ -32,7 +32,8 @@ class JevTests extends CatsEffectSuite {
 
   private val config = JevConfig(ApiKey("test-key"), retry = JevConfig.RetryConfig.disabled)
 
-  private def fake(status: Status, body: Json): IO[(Ref[IO, List[(String, Json)]], Jev[IO])] =
+  private def fake(status: Status, body: Json, config: JevConfig = config)
+    : IO[(Ref[IO, List[(String, Json)]], Jev[IO])] =
     Ref[IO].of(List.empty[(String, Json)]).map { seen =>
       val client = Client.fromHttpApp(HttpApp[IO] { req =>
         req
@@ -97,9 +98,7 @@ class JevTests extends CatsEffectSuite {
       assertEquals(
         body.hcursor.downField("questions").downField("q3").focus,
         Some(
-          json(
-            """{"type": "noul", "instructions": "Does the ticket ask about refund?", "criteria": null}"""
-          )
+          json("""{"type": "noul", "instructions": "Does the ticket ask about refund?"}""")
         ),
       )
     }
@@ -146,6 +145,46 @@ class JevTests extends CatsEffectSuite {
       .flatMap((seen, jev) => jev.evaluate("x", question).attempt.product(seen.get))
       .map { (result, requests) =>
         assertEquals(result, Left(JevError.InvalidQuestion("Duplicate Choice labels: a")))
+        assertEquals(requests, Nil)
+      }
+  }
+
+  private val workersAI =
+    JevConfig.workersAI("acc123", ApiKey("cf-token")).copy(retry = JevConfig.RetryConfig.disabled)
+
+  // As returned by the real API, envelope included.
+  private val noulResponse = json("""{
+    "result": {
+      "model": "clef",
+      "answers": {"q0": {"type": "noul", "noul": 0.7}},
+      "usage": {"input_tokens": 10, "output_tokens": 0}
+    },
+    "success": true,
+    "errors": [],
+    "messages": []
+  }""")
+
+  test("Workers AI: model goes in the path and the body") {
+    for {
+      (seen, jev) <- fake(Status.Ok, noulResponse, workersAI)
+      result <- jev.withModel(ModelId.clefFlash).evaluate("x", Question.noul("?"))
+      requests <- seen.get
+    } yield {
+      assertEquals(result.answers.yes.value, 0.7)
+      val List((uri, body)) = requests: @unchecked
+      assertEquals(
+        uri,
+        "https://api.cloudflare.com/client/v4/accounts/acc123/ai/run/@cf/cloudflare/clef-flash",
+      )
+      assertEquals(body.hcursor.downField("model").focus, Some(Json.fromString("clef-flash")))
+    }
+  }
+
+  test("Workers AI: listing models is unsupported") {
+    fake(Status.Ok, Json.obj(), workersAI)
+      .flatMap((seen, jev) => jev.models.attempt.product(seen.get))
+      .map { (result, requests) =>
+        assertEquals(result, Left(JevError.Unsupported("listing models")))
         assertEquals(requests, Nil)
       }
   }

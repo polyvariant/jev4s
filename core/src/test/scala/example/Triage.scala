@@ -69,30 +69,46 @@ object Triage {
 
 object Main extends IOApp.Simple {
 
-  val run: IO[Unit] =
-    EmberClientBuilder.default[IO].withTimeout(10.seconds).build.use { client =>
-      for {
-        config <- JevConfig.fromEnv[IO]
-        jev = Jev.instance[IO](config, client)
-        result <- jev.evaluate(
-          Ticket("Payouts", "Help! My payouts have been failing for 3 days."),
-          Triage.question,
-        )
-        triage = result.answers
-        _ <- IO.println(
-          s"answered by ${result.model.value}, ${result.usage.inputTokens} input tokens"
-        )
-        _ <- IO.println(s"urgent: ${triage.urgent.yes.value}")
-        _ <- IO.println(
-          s"department: ${triage.department.choice} (confidence ${triage.department.confidence.value})"
-        )
-        _ <- IO.println(
-          s"frustration: ${triage.frustration.score} ~ ${triage.frustration.mostLikely}"
-        )
-        _ <- IO.println(
-          s"topics: ${triage.topics.filter(_._2.yes.value > 0.5).keys.mkString(", ")}"
-        )
-      } yield ()
-    }
+  val run: IO[Unit] = JevConfig.fromEnv[IO].flatMap(TriageDemo.run)
+
+}
+
+// The same triage, answered by Cloudflare's Clef. Needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AUTH_TOKEN.
+object ClefTriage extends IOApp.Simple {
+
+  val run: IO[Unit] = JevConfig.workersAIFromEnv[IO].flatMap(TriageDemo.run)
+
+}
+
+object TriageDemo {
+
+  def run(config: JevConfig): IO[Unit] =
+    EmberClientBuilder
+      .default[IO]
+      .withTimeout(30.seconds)
+      .build
+      .use(client => triage(Jev.instance[IO](config, client)))
+
+  def triage(jev: Jev[IO]): IO[Unit] =
+    for {
+      result <- jev.evaluate(
+        Ticket("Payouts", "Help! My payouts have been failing for 3 days."),
+        Triage.question,
+      )
+      triage = result.answers
+      _ <- IO.println(
+        s"answered by ${result.model.value}, ${result.usage.inputTokens} input tokens"
+      )
+      _ <- IO.println(s"urgent: ${triage.urgent.yes.value}")
+      _ <- IO.println(
+        s"department: ${triage.department.choice} (confidence ${triage.department.confidence.value})"
+      )
+      _ <- IO.println(
+        s"frustration: ${triage.frustration.score} ~ ${triage.frustration.mostLikely}"
+      )
+      _ <- IO.println(
+        s"topics: ${triage.topics.filter(_._2.yes.value > 0.5).keys.mkString(", ")}"
+      )
+    } yield ()
 
 }

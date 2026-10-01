@@ -63,9 +63,35 @@ final case class JevConfig(
   baseUri: Uri = uri"https://api.typesafe.ai",
   model: ModelId = ModelId.latest,
   retry: JevConfig.RetryConfig = JevConfig.RetryConfig.default,
+  provider: JevConfig.Provider = JevConfig.Provider.TypeSafe,
 )
 
 object JevConfig {
+
+  /** Who serves the System One API. The request and answer formats are the same, the endpoints
+    * differ.
+    */
+  enum Provider {
+
+    /** TypeSafe's own API: `POST v1/systemone`. */
+    case TypeSafe
+
+    /** Cloudflare Workers AI (the Clef models):
+      * `POST accounts/{accountId}/ai/run/@cf/cloudflare/{model}`. Model listing isn't supported.
+      */
+    case WorkersAI(accountId: String)
+  }
+
+  /** Clef on Cloudflare Workers AI. `apiToken` needs the "Workers AI - Read" and "Workers AI -
+    * Edit" permissions.
+    */
+  def workersAI(accountId: String, apiToken: ApiKey, model: ModelId = ModelId.clef): JevConfig =
+    JevConfig(
+      apiKey = apiToken,
+      baseUri = uri"https://api.cloudflare.com/client/v4",
+      model = model,
+      provider = Provider.WorkersAI(accountId),
+    )
 
   final case class RetryConfig(maxRetries: Int, maxBackoff: FiniteDuration)
 
@@ -90,10 +116,29 @@ object JevConfig {
       )
     }
 
+  /** Reads `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN` (both required) and
+    * `CLOUDFLARE_MODEL` (`clef` by default).
+    */
+  def workersAIFromEnv[F[_]: Env: Concurrent]: F[JevConfig] =
+    (
+      Env[F]
+        .get("CLOUDFLARE_ACCOUNT_ID")
+        .flatMap(_.liftTo[F](JevError.MissingEnv("CLOUDFLARE_ACCOUNT_ID"))),
+      Env[F]
+        .get("CLOUDFLARE_AUTH_TOKEN")
+        .flatMap(_.liftTo[F](JevError.MissingEnv("CLOUDFLARE_AUTH_TOKEN"))),
+      Env[F].get("CLOUDFLARE_MODEL"),
+    ).mapN { (accountId, token, model) =>
+      workersAI(accountId, ApiKey(token), model.fold(ModelId.clef)(ModelId(_)))
+    }
+
 }
 
 enum JevError(message: String) extends Exception(message) {
   case MissingApiKey extends JevError("TYPESAFE_API_KEY is not set")
+  case MissingEnv(name: String) extends JevError(s"$name is not set")
+  case Unsupported(operation: String)
+    extends JevError(s"Not supported by this provider: $operation")
   case InvalidQuestion(reason: String) extends JevError(s"Invalid question: $reason")
   case Unauthorized(body: String) extends JevError(s"Unauthorized: $body")
   case Unprocessable(body: Json) extends JevError(s"Request failed validation: ${body.noSpaces}")
@@ -140,8 +185,12 @@ object Jev {
           .leftMap(JevError.InvalidQuestion(_))
           .liftTo[F]
         response <- client
-          .run(authorized(Method.POST, "v1/systemone").withEntity(body))
-          .use(decodeOrFail[ResponseBody])
+          .run(authorized(Method.POST, evaluateUri).withEntity(body))
+          .use(r =>
+            decodeOrFail(r)(
+              using responseDecoder
+            )
+          )
         evaluation <- Question
           .decodeResponse(question, response)
           .leftMap(JevError.UnexpectedAnswer(_))
@@ -149,15 +198,34 @@ object Jev {
       } yield evaluation
 
     def models: F[List[ModelCard]] =
-      client
-        .run(authorized(Method.GET, "v1/models"))
-        .use(decodeOrFail[ModelList])
-        .map(_.models)
+      config.provider match {
+        case JevConfig.Provider.TypeSafe =>
+          client
+            .run(authorized(Method.GET, config.baseUri / "v1" / "models"))
+            .use(decodeOrFail[ModelList])
+            .map(_.models)
+        case JevConfig.Provider.WorkersAI(_) => JevError.Unsupported("listing models").raiseError
+      }
 
     def withModel(model: ModelId): Jev[F] = JevImpl(config.copy(model = model), client)
 
-    private def authorized(method: Method, path: String): Request[F] =
-      Request[F](method, config.baseUri.addPath(path))
+    private def evaluateUri: Uri =
+      config.provider match {
+        case JevConfig.Provider.TypeSafe             => config.baseUri / "v1" / "systemone"
+        case JevConfig.Provider.WorkersAI(accountId) =>
+          config.baseUri / "accounts" / accountId / "ai" / "run" / "@cf" / "cloudflare" /
+            config.model.value
+      }
+
+    // Workers AI wraps the answers in Cloudflare's {"result": ..., "success": ...} envelope.
+    private def responseDecoder: Decoder[ResponseBody] =
+      config.provider match {
+        case JevConfig.Provider.TypeSafe     => Decoder[ResponseBody]
+        case JevConfig.Provider.WorkersAI(_) => Decoder[ResponseBody].at("result")
+      }
+
+    private def authorized(method: Method, uri: Uri): Request[F] =
+      Request[F](method, uri)
         .putHeaders(Authorization(Credentials.Token(AuthScheme.Bearer, config.apiKey.value)))
 
     private def decodeOrFail[A: Decoder](response: Response[F]): F[A] = {

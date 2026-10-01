@@ -130,6 +130,17 @@ You can also construct a `JevConfig` directly. Requests that fail with 408, 429 
 
 To use a different model for some requests, use `jev.withModel(ModelId("jev-1.13.0"))`. `jev.models` lists the available models.
 
+### Cloudflare Workers AI (Clef)
+
+Cloudflare's [Clef models](https://developers.cloudflare.com/workers-ai/models/clef/) speak the same System One format, so the same questions work against them:
+
+```scala
+val config = JevConfig.workersAI(accountId, ApiKey(apiToken)) // or JevConfig.workersAIFromEnv[IO]
+val jev = Jev.instance[IO](config, client).withModel(ModelId.clefFlash)
+```
+
+`JevConfig.workersAIFromEnv` reads `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AUTH_TOKEN` and optionally `CLOUDFLARE_MODEL` (`clef` by default). The token needs the "Workers AI - Read" and "Workers AI - Edit" permissions. `jev.models` isn't supported on Workers AI. `example.ClefTriage` runs the triage example against Clef.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
