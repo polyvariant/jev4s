@@ -17,7 +17,7 @@ ThisBuild / tlFatalWarnings := false
 
 ThisBuild / mergifyStewardConfig ~= (_.map(_.withMergeMinors(true)))
 
-val hearthVersion = "0.4.3"
+val hearthVersion = "0.4.4"
 val kindlingsVersion = "0.3.4"
 val http4sVersion = "0.23.38"
 val circeVersion = "0.14.17"
