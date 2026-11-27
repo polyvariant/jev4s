@@ -19,7 +19,7 @@ ThisBuild / mergifyStewardConfig ~= (_.map(_.withMergeMinors(true)))
 
 val hearthVersion = "0.4.5"
 val kindlingsVersion = "0.3.4"
-val http4sVersion = "0.23.38"
+val http4sVersion = "0.23.39"
 val circeVersion = "0.14.17"
 
 lazy val core = crossProject(JVMPlatform, JSPlatform, NativePlatform)
